@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teachable Machine 剪刀石頭布體感障礙賽</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%);
+            color: #f8fafc;
+        }
+        #game-canvas {
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-between p-4 md:p-6">
+
+    <header class="text-center my-2">
+        <h1 class="text-3xl md:text-4xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-emerald-400">
+            ✌️ 剪刀石頭布：AI 體感跑酷冒險
+        </h1>
+        <p class="text-sm md:text-base text-gray-300 mt-1">
+            手勢對照：<span class="text-cyan-300 font-bold">布 = 跳躍</span>、<span class="text-emerald-300 font-bold">石頭 = 跑步</span>、<span class="text-amber-300 font-bold">剪刀 = 蹲下</span>
+        </p>
+    </header>
+
+    <main class="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-3 gap-6 items-start my-auto">
+        
+        <!-- 左側：視訊與模型控制區 -->
+        <div class="bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700 shadow-xl flex flex-col items-center">
+            <h2 class="text-lg font-bold mb-3 text-cyan-300 flex items-center gap-2">
+                📹 模型與視訊設定
+            </h2>
+            
+            <div class="w-full mb-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                <label class="block text-xs font-semibold text-cyan-300 mb-1">選擇你下載的模型檔案：</label>
+                <input type="file" id="upload-files" multiple accept=".json,.bin" class="w-full text-xs text-gray-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-cyan-600 file:text-white hover:file:bg-cyan-500 cursor-pointer">
+                <p class="text-[11px] text-gray-400 mt-1">請一次選取下載的 3 個檔案 (<code class="text-cyan-300">model.json</code>, <code class="text-cyan-300">metadata.json</code>, <code class="text-cyan-300">weights.bin</code>)</p>
+            </div>
+
+            <div class="flex gap-2 w-full mb-4">
+                <button onclick="initModelFromFile()" id="start-btn" class="flex-1 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-2.5 px-4 rounded-xl shadow-lg transition transform active:scale-95 text-sm cursor-pointer">
+                    啟動相機與模型
+                </button>
+                <button onclick="toggleTestMode()" id="test-mode-btn" class="bg-slate-700 hover:bg-slate-600 text-gray-300 text-xs px-3 py-2 rounded-xl border border-slate-600 transition cursor-pointer" title="無相機時可用鍵盤測試">
+                    鍵盤測試
+                </button>
+            </div>
+
+            <!-- 視訊容器 -->
+            <div id="webcam-container" class="relative w-[200px] h-[200px] bg-slate-900 rounded-xl overflow-hidden border-2 border-slate-700 flex items-center justify-center mb-3">
+                <span class="text-xs text-gray-500 text-center px-4">相機尚未啟動</span>
+            </div>
+
+            <!-- 辨識機率標籤容器 -->
+            <div class="w-full bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                <div class="text-xs font-semibold text-gray-400 mb-2">即時預測數據:</div>
+                <div id="label-container" class="space-y-1.5 text-xs text-cyan-200">
+                    <div class="text-gray-500 italic">尚未開始預測...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側：遊戲主畫面區 -->
+        <div class="lg:col-span-2 bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700 shadow-xl flex flex-col items-center">
+            
+            <!-- 遊戲頂端資訊列 -->
+            <div class="w-full flex justify-between items-center mb-3 px-2">
+                <div class="text-sm font-bold text-gray-300">
+                    當前偵測手勢: <span id="current-action-display" class="text-emerald-400 font-black text-base px-2 py-0.5 bg-slate-900 rounded border border-slate-700">準備就緒</span>
+                </div>
+                <div class="flex gap-4 text-sm font-bold">
+                    <span class="text-cyan-300">分數: <span id="score-val" class="text-white text-lg">0</span></span>
+                    <span class="text-amber-300">最高分: <span id="highscore-val" class="text-white text-lg">0</span></span>
+                </div>
+            </div>
+
+            <!-- 畫布容器 -->
+            <div class="relative w-full aspect-[2/1] bg-slate-900 rounded-xl overflow-hidden border-2 border-slate-700">
+                <canvas id="game-canvas" class="w-full h-full block"></canvas>
+                
+                <!-- 遊戲開始/結束覆蓋層 -->
+                <div id="overlay-screen" class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center">
+                    <h3 id="overlay-title" class="text-2xl md:text-3xl font-black text-cyan-400 mb-2">剪刀石頭布障礙賽</h3>
+                    <div id="overlay-desc" class="text-sm text-gray-300 max-w-md mb-6 space-y-2 text-left bg-slate-900/80 p-4 rounded-xl border border-slate-700">
+                        <p class="font-bold text-cyan-300 text-center mb-2">🎮 遊戲玩法與手勢對照指南：</p>
+                        <p>🖐️ <strong>布 (Paper)：</strong>比出「布」手勢 = <strong>向上跳躍</strong></p>
+                        <p>✊ <strong>石頭 (Rock)：</strong>比出「石頭」手勢 = <strong>正常跑步前進</strong></p>
+                        <p>✌️ <strong>剪刀 (Scissors)：</strong>比出「剪刀」手勢 = <strong>向下蹲下</strong></p>
+                    </div>
+                    <button onclick="startGame()" id="game-start-btn" class="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition transform active:scale-95 text-base cursor-pointer">
+                        開始挑戰
+                    </button>
+                </div>
+            </div>
+
+            <!-- 遊戲控制說明提示卡片 -->
+            <div class="w-full mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                <div class="bg-slate-900/80 p-2.5 rounded-lg border border-cyan-500/30">
+                    <div class="text-base mb-1">🖐️</div>
+                    <div class="font-bold text-cyan-300">布 (Paper)</div>
+                    <div class="text-gray-400 text-[11px]">向上跳躍</div>
+                </div>
+                <div class="bg-slate-900/80 p-2.5 rounded-lg border border-emerald-500/30">
+                    <div class="text-base mb-1">✊</div>
+                    <div class="font-bold text-emerald-300">石頭 (Rock)</div>
+                    <div class="text-gray-400 text-[11px]">正常跑步</div>
+                </div>
+                <div class="bg-slate-900/80 p-2.5 rounded-lg border border-amber-500/30">
+                    <div class="text-base mb-1">✌️</div>
+                    <div class="font-bold text-amber-300">剪刀 (Scissors)</div>
+                    <div class="text-gray-400 text-[11px]">向下蹲下</div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <footer class="text-center text-xs text-gray-500 mt-4">
+        Teachable Machine Gesture Game &bull; Built with Tailwind & HTML5 Canvas
+    </footer>
+
+    <!-- TensorFlow.js and Teachable Machine Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+    <script>
+        let model, webcam, labelContainer, maxPredictions;
+        let isModelLoaded = false;
+        let isTestMode = false;
+
+        // 遊戲核心變數
+        let canvas, ctx;
+        let gameRunning = false;
+        let score = 0;
+        let highScore = 0;
+        let gameSpeed = 5;
+        let obstacles = [];
+
+        // 玩家物件
+        let player = {
+            x: 80,
+            y: 0,
+            width: 40,
+            height: 60,
+            vy: 0,
+            jumpPower: -12,
+            gravity: 0.6,
+            isJumping: false,
+            isDucking: false,
+            state: 'running'
+        };
+
+        window.onload = function() {
+            canvas = document.getElementById('game-canvas');
+            ctx = canvas.getContext('2d');
+            
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // 鍵盤測試模式對應：空白鍵 = 布(跳), 往下 = 剪刀(蹲)
+            window.addEventListener('keydown', (e) => {
+                if (!gameRunning) return;
+                if (e.code === 'Space' || e.code === 'ArrowUp') {
+                    triggerJump();
+                } else if (e.code === 'ArrowDown') {
+                    triggerDown(true);
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                if (e.code === 'ArrowDown') {
+                    triggerDown(false);
+                }
+            });
+
+            drawInitialScreen();
+        };
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            player.y = canvas.clientHeight - 40 - player.height;
+        }
+
+        // 透過上傳本地模型檔案來載入模型
+        async function initModelFromFile() {
+            const fileInput = document.getElementById('upload-files');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert("請先上傳下載的模型檔案（model.json, metadata.json, weights.bin）！");
+                return;
+            }
+
+            const startBtn = document.getElementById('start-btn');
+            startBtn.innerText = "載入中...";
+            startBtn.disabled = true;
+
+            try {
+                model = await tmImage.loadFromFiles(fileInput.files);
+                maxPredictions = model.getTotalClasses();
+
+                const flip = true;
+                webcam = new tmImage.Webcam(200, 200, flip);
+                await webcam.setup();
+                await webcam.play();
+                window.requestAnimationFrame(loopWebcam);
+
+                const webcamContainer = document.getElementById("webcam-container");
+                webcamContainer.innerHTML = "";
+                webcamContainer.appendChild(webcam.canvas);
+                webcam.canvas.style.width = "100%";
+                webcam.canvas.style.height = "100%";
+                webcam.canvas.style.objectFit = "cover";
+
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = "";
+                for (let i = 0; i < maxPredictions; i++) {
+                    labelContainer.appendChild(document.createElement("div"));
+                }
+
+                isModelLoaded = true;
+                startBtn.innerText = "模型已就緒 ✓";
+                startBtn.classList.remove('from-cyan-500', 'to-blue-600');
+                startBtn.classList.add('from-emerald-500', 'to-teal-600');
+            } catch (error) {
+                console.error(error);
+                alert("載入模型失敗，請確認是否選取了完整正確的 3 個檔案！");
+                startBtn.innerText = "載入失敗 (點此重試)";
+                startBtn.disabled = false;
+            }
+        }
+
+        async function loopWebcam() {
+            if (webcam && webcam.canvas) {
+                webcam.update();
+                await predict();
+            }
+            window.requestAnimationFrame(loopWebcam);
+        }
+
+        async function predict() {
+            if (!model || !webcam || isTestMode) return;
+            const prediction = await model.predict(webcam.canvas);
+            
+            let highestProb = 0;
+            let bestClass = "Nothing";
+
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                const prob = prediction[i].probability;
+                
+                const classPrediction = `${className}: ${(prob * 100).toFixed(1)}%`;
+                if (labelContainer && labelContainer.childNodes[i]) {
+                    labelContainer.childNodes[i].innerHTML = classPrediction;
+                }
+
+                if (prob > highestProb) {
+                    highestProb = prob;
+                    bestClass = className;
+                }
+            }
+
+            processActionByName(bestClass, highestProb);
+        }
+
+        // 根據剪刀、石頭、布的預測結果控制遊戲
+        // 布 = 跳躍, 石頭 = 正常跑步, 剪刀 = 蹲下
+        function processActionByName(className, prob) {
+            if (prob < 0.65) return; // 信心低於 65% 略過
+
+            const name = className.toLowerCase();
+            document.getElementById('current-action-display').innerText = `${className} (${(prob*100).toFixed(0)}%)`;
+
+            // 布 = 跳躍
+            if (name.includes('paper') || name.includes('布')) {
+                triggerJump();
+            } 
+            // 剪刀 = 蹲下
+            else if (name.includes('scissors') || name.includes('剪刀')) {
+                triggerDown(true);
+            } 
+            // 石頭 = 正常跑步
+            else if (name.includes('rock') || name.includes('石頭') || name.includes('stone')) {
+                triggerDown(false);
+            }
+        }
+
+        function toggleTestMode() {
+            isTestMode = !isTestMode;
+            const btn = document.getElementById('test-mode-btn');
+            if (isTestMode) {
+                btn.classList.add('bg-cyan-600', 'text-white');
+                btn.innerText = "已啟用鍵盤測試 (空白鍵=跳, ↓=蹲)";
+                document.getElementById('current-action-display').innerText = "鍵盤控制中";
+            } else {
+                btn.classList.remove('bg-cyan-600', 'text-white');
+                btn.innerText = "鍵盤測試";
+            }
+        }
+
+        function triggerJump() {
+            if (!player.isJumping && !player.isDucking) {
+                player.vy = player.jumpPower;
+                player.isJumping = true;
+                player.state = 'jumping';
+            }
+        }
+
+        function triggerDown(isDown) {
+            if (isDown && !player.isJumping) {
+                player.isDucking = true;
+                player.state = 'ducking';
+                player.height = 30; // 蹲下變矮
+            } else if (!isDown && player.isDucking) {
+                player.isDucking = false;
+                player.state = 'running';
+                player.height = 60; // 恢復站立
+            }
+        }
+
+        function startGame() {
+            score = 0;
+            gameSpeed = 5;
+            obstacles = [];
+            gameRunning = true;
+            document.getElementById('overlay-screen').classList.add('hidden');
+            requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            if (score > highScore) {
+                highScore = score;
+                document.getElementById('highscore-val').innerText = highScore;
+            }
+            
+            const overlay = document.getElementById('overlay-screen');
+            document.getElementById('overlay-title').innerText = "遊戲結束！";
+            document.getElementById('overlay-desc').innerHTML = `
+                <p class="text-center mb-2 text-rose-400 font-bold">你的最終得分: ${score} 分</p>
+                <p class="text-xs text-gray-300 text-center">再擺出正確手勢挑戰更高分吧！</p>
+            `;
+            document.getElementById('game-start-btn').innerText = "重新挑戰";
+            overlay.classList.remove('hidden');
+        }
+
+        function drawInitialScreen() {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+            drawScenery();
+        }
+
+        function drawScenery() {
+            const w = canvas.clientWidth;
+            const h = canvas.clientHeight;
+            const groundY = h - 40;
+
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(w, groundY);
+            ctx.stroke();
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            const w = canvas.clientWidth;
+            const h = canvas.clientHeight;
+            const groundY = h - 40;
+
+            ctx.clearRect(0, 0, w, h);
+
+            score++;
+            document.getElementById('score-val').innerText = Math.floor(score / 10);
+            gameSpeed = 5 + Math.floor(score / 300);
+
+            // 玩家物理
+            player.vy += player.gravity;
+            player.y += player.vy;
+
+            const targetY = groundY - player.height;
+            if (player.y >= targetY) {
+                player.y = targetY;
+                player.vy = 0;
+                player.isJumping = false;
+                if (!player.isDucking) {
+                    player.state = 'running';
+                }
+            }
+
+            // 生成障礙物
+            if (Math.random() < 0.018 && obstacles.length < 3) {
+                const type = Math.random() > 0.4 ? 'ground' : 'air';
+                obstacles.push({
+                    x: w,
+                    y: type === 'ground' ? groundY - 45 : groundY - 105,
+                    width: type === 'ground' ? 30 : 40,
+                    height: type === 'ground' ? 45 : 30,
+                    type: type,
+                    color: type === 'ground' ? '#f43f5e' : '#fbbf24'
+                });
+            }
+
+            // 更新障礙物
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.x -= gameSpeed;
+
+                ctx.fillStyle = obs.color;
+                ctx.beginPath();
+                ctx.roundRect(obs.x, obs.y, obs.width, obs.height, 6);
+                ctx.fill();
+
+                // 碰撞檢測
+                if (
+                    player.x < obs.x + obs.width &&
+                    player.x + player.width > obs.x &&
+                    player.y < obs.y + obs.height &&
+                    player.y + player.height > obs.y
+                ) {
+                    gameOver();
+                    return;
+                }
+
+                if (obs.x + obs.width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // 繪製地板
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(w, groundY);
+            ctx.stroke();
+
+            // 繪製玩家
+            ctx.fillStyle = player.isDucking ? '#34d399' : (player.isJumping ? '#60a5fa' : '#a78bfa');
+            ctx.beginPath();
+            ctx.roundRect(player.x, player.y, player.width, player.height, 8);
+            ctx.fill();
+
+            // 玩家眼睛
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(player.x + 25, player.y + 12, 6, 6);
+
+            if (gameRunning) {
+                requestAnimationFrame(gameLoop);
+            }
+        }
+    </script>
+</body>
+</html>
